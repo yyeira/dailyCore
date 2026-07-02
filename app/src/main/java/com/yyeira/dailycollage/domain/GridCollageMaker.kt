@@ -9,46 +9,51 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import com.yyeira.dailycollage.model.CollageLayout
 import com.yyeira.dailycollage.model.GalleryImage
-import kotlin.math.ceil
+import com.yyeira.dailycollage.model.OutputAspectRatio
 import kotlin.math.max
+import kotlin.math.min
 
 class GridCollageMaker(
     private val contentResolver: ContentResolver,
     private val canvasWidth: Int = 1080,
 ) {
-    fun createCollage(images: List<GalleryImage>, columns: Int, dateKey: String): Bitmap {
-        require(columns > 0) { "columns must be positive" }
+    fun createCollage(
+        images: List<GalleryImage>,
+        layout: CollageLayout,
+        dateKey: String,
+        outputAspectRatio: OutputAspectRatio = OutputAspectRatio.NATURAL,
+    ): Bitmap {
         require(images.isNotEmpty()) { "images must not be empty" }
 
-        val cellWidth = canvasWidth / columns
-        val cellHeight = cellWidth
-        val rows = ceil(images.size.toDouble() / columns).toInt()
-        val canvasHeight = rows * cellHeight
-
-        val output = Bitmap.createBitmap(canvasWidth, canvasHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
+        val scale = canvasWidth.toFloat() / layout.canvasWidth.toFloat()
+        val outputHeight = (layout.canvasHeight * scale).toInt().coerceAtLeast(1)
+        val natural = Bitmap.createBitmap(canvasWidth, outputHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(natural)
+        canvas.drawColor(BACKGROUND_COLOR)
 
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
-        images.forEachIndexed { index, image ->
-            val row = index / columns
-            val col = index % columns
-            val left = col * cellWidth
-            val top = row * cellHeight
+        layout.cells.forEach { cell ->
+            val image = images.getOrNull(cell.imageIndex) ?: return@forEach
+            val slotLeft = (cell.left * scale).toInt()
+            val slotTop = (cell.top * scale).toInt()
+            val slotWidth = (cell.width * scale).toInt().coerceAtLeast(1)
+            val slotHeight = (cell.height * scale).toInt().coerceAtLeast(1)
 
-            val bitmap = decodeScaledBitmap(image, cellWidth, cellHeight)
+            val bitmap = decodeScaledBitmap(image, slotWidth, slotHeight)
             if (bitmap != null) {
                 try {
-                    val (srcRect, dstRect) = centerCropRects(
+                    val dstRect = fitCenterDstRect(
                         bitmap.width,
                         bitmap.height,
-                        left,
-                        top,
-                        cellWidth,
-                        cellHeight,
+                        slotLeft,
+                        slotTop,
+                        slotWidth,
+                        slotHeight,
                     )
-                    canvas.drawBitmap(bitmap, srcRect, dstRect, paint)
+                    canvas.drawBitmap(bitmap, null, dstRect, paint)
                 } finally {
                     if (!bitmap.isRecycled) {
                         bitmap.recycle()
@@ -57,8 +62,33 @@ class GridCollageMaker(
             }
         }
 
-        drawDateWatermark(canvas, dateKey, canvasWidth, canvasHeight)
-        return output
+        val fitted = OutputAspectRatioFitter.apply(natural, outputAspectRatio, canvasWidth)
+        if (fitted !== natural && !natural.isRecycled) {
+            natural.recycle()
+        }
+
+        val finalCanvas = Canvas(fitted)
+        drawDateWatermark(finalCanvas, dateKey, fitted.width, fitted.height)
+        return fitted
+    }
+
+    private fun fitCenterDstRect(
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        slotLeft: Int,
+        slotTop: Int,
+        slotWidth: Int,
+        slotHeight: Int,
+    ): Rect {
+        val scale = min(
+            slotWidth.toFloat() / bitmapWidth,
+            slotHeight.toFloat() / bitmapHeight,
+        )
+        val drawWidth = (bitmapWidth * scale).toInt().coerceAtLeast(1)
+        val drawHeight = (bitmapHeight * scale).toInt().coerceAtLeast(1)
+        val drawLeft = slotLeft + (slotWidth - drawWidth) / 2
+        val drawTop = slotTop + (slotHeight - drawHeight) / 2
+        return Rect(drawLeft, drawTop, drawLeft + drawWidth, drawTop + drawHeight)
     }
 
     private fun drawDateWatermark(canvas: Canvas, dateKey: String, canvasWidth: Int, canvasHeight: Int) {
@@ -129,28 +159,7 @@ class GridCollageMaker(
         return max(inSampleSize, 1)
     }
 
-    private fun centerCropRects(
-        bitmapWidth: Int,
-        bitmapHeight: Int,
-        left: Int,
-        top: Int,
-        cellWidth: Int,
-        cellHeight: Int,
-    ): Pair<Rect, Rect> {
-        val dstRect = Rect(left, top, left + cellWidth, top + cellHeight)
-        val bitmapRatio = bitmapWidth.toFloat() / bitmapHeight
-        val cellRatio = cellWidth.toFloat() / cellHeight
-
-        val srcRect = if (bitmapRatio > cellRatio) {
-            val cropWidth = (bitmapHeight * cellRatio).toInt()
-            val cropLeft = (bitmapWidth - cropWidth) / 2
-            Rect(cropLeft, 0, cropLeft + cropWidth, bitmapHeight)
-        } else {
-            val cropHeight = (bitmapWidth / cellRatio).toInt()
-            val cropTop = (bitmapHeight - cropHeight) / 2
-            Rect(0, cropTop, bitmapWidth, cropTop + cropHeight)
-        }
-
-        return srcRect to dstRect
+    companion object {
+        private val BACKGROUND_COLOR = Color.parseColor("#121212")
     }
 }

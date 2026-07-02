@@ -8,11 +8,16 @@ import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yyeira.dailycollage.data.GalleryRepository
+import com.yyeira.dailycollage.domain.CollageLayoutPlanner
 import com.yyeira.dailycollage.domain.GridCollageMaker
+import com.yyeira.dailycollage.domain.ImageDimensionResolver
 import com.yyeira.dailycollage.domain.ImageGrouper
 import com.yyeira.dailycollage.model.DayPreview
+import com.yyeira.dailycollage.model.LayoutRule
+import com.yyeira.dailycollage.model.OutputAspectRatio
 import com.yyeira.dailycollage.util.ImageDeleter
 import com.yyeira.dailycollage.util.ImageSaver
+import com.yyeira.dailycollage.util.LayoutDescriptionFormatter
 import com.yyeira.dailycollage.util.PermissionHelper
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
@@ -26,11 +31,13 @@ import kotlinx.coroutines.withContext
 data class CollageUiState(
     val startDate: LocalDate? = null,
     val endDate: LocalDate? = null,
-    val columns: Int = 2,
+    val layoutRule: LayoutRule = LayoutRule.AUTO,
+    val outputAspectRatio: OutputAspectRatio = OutputAspectRatio.NATURAL,
     val deleteOriginalsAfterCollage: Boolean = false,
     val isLoadingPreview: Boolean = false,
     val isProcessing: Boolean = false,
     val previews: List<DayPreview> = emptyList(),
+    val rebuildingDateKey: String? = null,
     val progressDate: String? = null,
     val progressCurrent: Int = 0,
     val progressTotal: Int = 0,
@@ -44,6 +51,8 @@ data class CollageUiState(
 class CollageViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
     private val galleryRepository = GalleryRepository(context.contentResolver)
+    private val dimensionResolver = ImageDimensionResolver(context.contentResolver)
+    private val layoutPlanner = CollageLayoutPlanner(canvasWidth = 1080)
     private val collageMaker = GridCollageMaker(context.contentResolver)
     private val previewMaker = GridCollageMaker(context.contentResolver, canvasWidth = 360)
     private val imageSaver = ImageSaver(context.contentResolver)
@@ -75,11 +84,20 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun setColumns(columns: Int) {
-        if (_uiState.value.columns != columns) {
+    fun setLayoutRule(rule: LayoutRule) {
+        if (_uiState.value.layoutRule != rule) {
             clearPreviews()
         }
-        _uiState.update { it.copy(columns = columns) }
+        _uiState.update { it.copy(layoutRule = rule) }
+        generatePreview()
+    }
+
+    fun setOutputAspectRatio(ratio: OutputAspectRatio) {
+        if (_uiState.value.outputAspectRatio != ratio) {
+            clearPreviews()
+        }
+        _uiState.update { it.copy(outputAspectRatio = ratio) }
+        generatePreview()
     }
 
     fun setDeleteOriginalsAfterCollage(enabled: Boolean) {
@@ -114,7 +132,7 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
 
             try {
                 val previews = withContext(Dispatchers.IO) {
-                    buildPreviews(startDate, endDate, state.columns)
+                    buildPreviews(startDate, endDate, state.layoutRule, state.outputAspectRatio)
                 }
                 _uiState.update {
                     it.copy(
@@ -162,7 +180,7 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
 
             try {
                 val result = withContext(Dispatchers.IO) {
-                    processCollageFromPreviews(state.previews, state.columns, state.deleteOriginalsAfterCollage)
+                    processCollageFromPreviews(state.previews, state.deleteOriginalsAfterCollage)
                 }
                 _uiState.update {
                     it.copy(
@@ -208,27 +226,135 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(pendingDeleteIntentSender = null) }
     }
 
+    fun swapImagesInDay(dateKey: String, indexA: Int, indexB: Int) {
+        if (indexA == indexB) return
+
+        val dayIndex = _uiState.value.previews.indexOfFirst { it.dateKey == dateKey }
+        if (dayIndex < 0) return
+
+        val day = _uiState.value.previews[dayIndex]
+        if (indexA !in day.images.indices || indexB !in day.images.indices) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(rebuildingDateKey = dateKey, errorMessage = null) }
+            try {
+                val updatedPreviews = withContext(Dispatchers.IO) {
+                    updateDayImageOrder(dayIndex) { images ->
+                        val temp = images[indexA]
+                        images[indexA] = images[indexB]
+                        images[indexB] = temp
+                    }
+                }
+                _uiState.update {
+                    it.copy(previews = updatedPreviews, rebuildingDateKey = null)
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        rebuildingDateKey = null,
+                        errorMessage = e.message ?: e.javaClass.simpleName,
+                    )
+                }
+            }
+        }
+    }
+
+    fun moveImageInDay(dateKey: String, fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+
+        val dayIndex = _uiState.value.previews.indexOfFirst { it.dateKey == dateKey }
+        if (dayIndex < 0) return
+
+        val day = _uiState.value.previews[dayIndex]
+        if (fromIndex !in day.images.indices || toIndex !in day.images.indices) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(rebuildingDateKey = dateKey, errorMessage = null) }
+            try {
+                val updatedPreviews = withContext(Dispatchers.IO) {
+                    updateDayImageOrder(dayIndex) { images ->
+                        val image = images.removeAt(fromIndex)
+                        images.add(toIndex, image)
+                    }
+                }
+                _uiState.update {
+                    it.copy(previews = updatedPreviews, rebuildingDateKey = null)
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        rebuildingDateKey = null,
+                        errorMessage = e.message ?: e.javaClass.simpleName,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun updateDayImageOrder(
+        dayIndex: Int,
+        mutate: (MutableList<com.yyeira.dailycollage.model.GalleryImage>) -> Unit,
+    ): List<DayPreview> {
+        val currentPreviews = _uiState.value.previews
+        val day = currentPreviews[dayIndex]
+        val images = day.images.toMutableList()
+        mutate(images)
+
+        val newBitmap = previewMaker.createCollage(
+            images,
+            day.layout,
+            day.dateKey,
+            _uiState.value.outputAspectRatio,
+        )
+        if (!day.previewBitmap.isRecycled) {
+            day.previewBitmap.recycle()
+        }
+
+        val newPreviews = currentPreviews.toMutableList()
+        newPreviews[dayIndex] = day.copy(images = images, previewBitmap = newBitmap)
+        return newPreviews
+    }
+
     private data class ProcessResult(
         val summary: String?,
         val warning: String?,
         val pendingDeleteIntentSender: IntentSender? = null,
     )
 
-    private fun buildPreviews(startDate: LocalDate, endDate: LocalDate, columns: Int): List<DayPreview> {
+    private fun buildPreviews(
+        startDate: LocalDate,
+        endDate: LocalDate,
+        layoutRule: LayoutRule,
+        outputAspectRatio: OutputAspectRatio,
+    ): List<DayPreview> {
         val images = galleryRepository.queryImages(startDate, endDate)
         if (images.isEmpty()) {
             throw NoImagesException()
         }
 
         return ImageGrouper.groupByDay(images).map { (dateKey, dayImages) ->
-            val previewBitmap = previewMaker.createCollage(dayImages, columns, dateKey)
-            DayPreview(
-                dateKey = dateKey,
-                imageCount = dayImages.size,
-                previewBitmap = previewBitmap,
-                images = dayImages,
-            )
+            buildDayPreview(dateKey, dayImages, layoutRule, outputAspectRatio)
         }
+    }
+
+    private fun buildDayPreview(
+        dateKey: String,
+        dayImages: List<com.yyeira.dailycollage.model.GalleryImage>,
+        layoutRule: LayoutRule,
+        outputAspectRatio: OutputAspectRatio,
+    ): DayPreview {
+        val dimensions = dimensionResolver.resolve(dayImages).map { it.second }
+        val layout = layoutPlanner.plan(dayImages, dimensions, layoutRule)
+        val layoutDescription = LayoutDescriptionFormatter.format(context, layout.description)
+        val previewBitmap = previewMaker.createCollage(dayImages, layout, dateKey, outputAspectRatio)
+        return DayPreview(
+            dateKey = dateKey,
+            imageCount = dayImages.size,
+            layoutDescription = layoutDescription,
+            previewBitmap = previewBitmap,
+            images = dayImages,
+            layout = layout,
+        )
     }
 
     private fun buildLargeDayWarning(previews: List<DayPreview>): String? {
@@ -242,7 +368,6 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
 
     private fun processCollageFromPreviews(
         previews: List<DayPreview>,
-        columns: Int,
         deleteOriginals: Boolean,
     ): ProcessResult {
         var savedCount = 0
@@ -257,7 +382,12 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
 
-            val collage = collageMaker.createCollage(day.images, columns, day.dateKey)
+            val collage = collageMaker.createCollage(
+                day.images,
+                day.layout,
+                day.dateKey,
+                _uiState.value.outputAspectRatio,
+            )
             val saved = imageSaver.saveJpeg(collage, "${day.dateKey}.jpg")
             collage.recycle()
             if (saved) {
