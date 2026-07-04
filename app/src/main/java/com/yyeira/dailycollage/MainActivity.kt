@@ -619,6 +619,7 @@ private fun PreviewDayCard(
             cellRects = cellRects,
             isRebuilding = isRebuilding,
             onSwapImages = onSwapImages,
+            onCropOffsetChanged = onCropOffsetChanged,
             onDismiss = { showZoomDialog = false },
         )
     }
@@ -959,12 +960,14 @@ private fun ZoomablePreviewDialog(
     cellRects: List<NormalizedCellRect>,
     isRebuilding: Boolean,
     onSwapImages: (Int, Int) -> Unit,
+    onCropOffsetChanged: (Int, CropOffset) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
     var selectedCellIndex by remember { mutableStateOf(-1) }
+    var editingCropIndex by remember { mutableStateOf(-1) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -1008,7 +1011,10 @@ private fun ZoomablePreviewDialog(
                                 val selected = selectedCellIndex
                                 when {
                                     selected < 0 -> selectedCellIndex = cellIndex
-                                    selected == cellIndex -> selectedCellIndex = -1
+                                    selected == cellIndex -> {
+                                        editingCropIndex = cellIndex
+                                        selectedCellIndex = -1
+                                    }
                                     else -> {
                                         onSwapImages(selected, cellIndex)
                                         selectedCellIndex = -1
@@ -1103,20 +1109,33 @@ private fun ZoomablePreviewDialog(
                 )
             }
 
-            if (preview.images.size > 1) {
-                Text(
-                    text = if (selectedCellIndex >= 0) {
-                        stringResource(R.string.zoom_hint_swap)
-                    } else {
-                        stringResource(R.string.zoom_hint_select)
-                    },
-                    color = Color.White.copy(alpha = 0.7f),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 48.dp),
-                )
-            }
+            Text(
+                text = when {
+                    selectedCellIndex >= 0 -> stringResource(R.string.zoom_hint_swap)
+                    else -> stringResource(R.string.zoom_hint_select)
+                },
+                color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 48.dp),
+            )
+        }
+    }
+
+    if (editingCropIndex >= 0 && editingCropIndex in preview.images.indices) {
+        val cell = preview.layout.cells.firstOrNull { it.imageIndex == editingCropIndex }
+        if (cell != null) {
+            CropEditorDialog(
+                imageUri = preview.images[editingCropIndex].uri,
+                cellAspectRatio = cell.width.toFloat() / cell.height.coerceAtLeast(1),
+                currentOffset = preview.cropOffsets[editingCropIndex] ?: CropOffset.CENTER,
+                onConfirm = { offset ->
+                    onCropOffsetChanged(editingCropIndex, offset)
+                    editingCropIndex = -1
+                },
+                onDismiss = { editingCropIndex = -1 },
+            )
         }
     }
 }
