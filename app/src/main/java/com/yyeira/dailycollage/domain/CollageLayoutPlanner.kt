@@ -41,9 +41,15 @@ class CollageLayoutPlanner(
                 horizontalRowLayout(sizedImages, "layout_horizontal")
             }
             LayoutRule.HERO_TOP -> planHeroTop(sizedImages)
+            LayoutRule.HERO_LEFT -> planHeroSide(sizedImages, leftHero = true)
+            LayoutRule.HERO_RIGHT -> planHeroSide(sizedImages, leftHero = false)
             LayoutRule.GRID_2 -> rowPackLayout(sizedImages, 2, "layout_auto_row_2")
             LayoutRule.GRID_3 -> rowPackLayout(sizedImages, 3, "layout_auto_row_3")
             LayoutRule.GRID_4 -> rowPackLayout(sizedImages, 4, "layout_auto_row_4")
+            LayoutRule.GRID_SQUARE -> gridSquareLayout(sizedImages, guessSquareColumns(sizedImages.size), "layout_grid_square")
+            LayoutRule.FIT_2 -> proportionalRowPackLayout(sizedImages, 2, "layout_fit_2")
+            LayoutRule.FIT_3 -> proportionalRowPackLayout(sizedImages, 3, "layout_fit_3")
+            LayoutRule.FIT_4 -> proportionalRowPackLayout(sizedImages, 4, "layout_fit_4")
         }
     }
 
@@ -54,6 +60,79 @@ class CollageLayoutPlanner(
             3 -> heroTopLayout(sizedImages, "layout_hero_top")
             else -> heroFirstWithGridLayout(sizedImages, "layout_hero_top")
         }
+    }
+
+    private fun planHeroSide(sizedImages: List<SizedImage>, leftHero: Boolean): CollageLayout {
+        val description = if (leftHero) "layout_hero_left" else "layout_hero_right"
+        return when (sizedImages.size) {
+            1 -> singleLayout(sizedImages)
+            2 -> horizontalProportionalRow(sizedImages, description)
+            3 -> if (leftHero) {
+                leftBigRightStackLayout(sizedImages, description)
+            } else {
+                rightBigLeftStackLayout(sizedImages, description)
+            }
+            else -> if (leftHero) {
+                heroSideWithStackLayout(sizedImages, heroFirst = true, description)
+            } else {
+                heroSideWithStackLayout(sizedImages, heroFirst = false, description)
+            }
+        }
+    }
+
+    private fun heroSideWithStackLayout(
+        sizedImages: List<SizedImage>,
+        heroFirst: Boolean,
+        description: String,
+    ): CollageLayout {
+        val heroImage = if (heroFirst) sizedImages.first() else sizedImages.last()
+        val stackImages = if (heroFirst) sizedImages.drop(1) else sizedImages.dropLast(1)
+
+        val heroWidth = ((canvasWidth - GAP) * 3) / 5
+        val stackWidth = canvasWidth - GAP - heroWidth
+
+        val stackLayout = verticalStackInWidth(stackImages, stackWidth, if (heroFirst) 1 else 0)
+        val heroHeight = max(stackLayout.canvasHeight, fitHeight(heroWidth, heroImage.dimensions.aspectRatio))
+
+        val heroIndex = if (heroFirst) 0 else sizedImages.lastIndex
+        val heroLeft = if (heroFirst) 0 else stackWidth + GAP
+        val stackLeft = if (heroFirst) heroWidth + GAP else 0
+
+        val cells = buildList {
+            add(CollageCell(heroIndex, heroLeft, 0, heroWidth, heroHeight))
+            stackLayout.cells.forEach { cell ->
+                add(cell.copy(left = cell.left + stackLeft))
+            }
+        }
+
+        return CollageLayout(
+            canvasWidth = canvasWidth,
+            canvasHeight = heroHeight,
+            cells = cells,
+            description = description,
+        )
+    }
+
+    private fun verticalStackInWidth(
+        sizedImages: List<SizedImage>,
+        width: Int,
+        startIndex: Int,
+    ): CollageLayout {
+        var top = 0
+        val cells = sizedImages.mapIndexed { i, sizedImage ->
+            val slotHeight = fitHeight(width, sizedImage.dimensions.aspectRatio)
+            val cell = CollageCell(
+                imageIndex = startIndex + i,
+                left = 0,
+                top = top,
+                width = width,
+                height = slotHeight,
+            )
+            top += slotHeight
+            if (i < sizedImages.lastIndex) top += GAP
+            cell
+        }
+        return CollageLayout(canvasWidth = width, canvasHeight = top, cells = cells, description = "")
     }
 
     private fun heroFirstWithGridLayout(sizedImages: List<SizedImage>, description: String): CollageLayout {
@@ -87,52 +166,46 @@ class CollageLayoutPlanner(
             2 -> buildTwoImageCandidates(sizedImages)
             3 -> buildThreeImageCandidates(sizedImages)
             4 -> listOf(
+                proportionalRowPackLayout(sizedImages, 2, "layout_fit_2"),
                 gridSquareLayout(sizedImages, 2, "layout_grid_2x2"),
                 rowPackLayout(sizedImages, 2, "layout_auto_row_2"),
+                heroSideWithStackLayout(sizedImages, heroFirst = true, "layout_hero_left"),
             )
             5, 6 -> listOf(
+                proportionalRowPackLayout(sizedImages, 2, "layout_fit_2"),
+                proportionalRowPackLayout(sizedImages, 3, "layout_fit_3"),
                 rowPackLayout(sizedImages, 2, "layout_auto_row_2"),
                 rowPackLayout(sizedImages, 3, "layout_auto_row_3"),
             )
-            else -> listOf(2, 3).map { cols ->
-                rowPackLayout(sizedImages, cols, "layout_auto_row_$cols")
+            else -> buildList {
+                add(proportionalRowPackLayout(sizedImages, 2, "layout_fit_2"))
+                add(proportionalRowPackLayout(sizedImages, 3, "layout_fit_3"))
+                add(rowPackLayout(sizedImages, 2, "layout_auto_row_2"))
+                add(rowPackLayout(sizedImages, 3, "layout_auto_row_3"))
+                if (sizedImages.size <= 16) {
+                    add(proportionalRowPackLayout(sizedImages, 4, "layout_fit_4"))
+                }
             }
         }
     }
 
     private fun buildTwoImageCandidates(sizedImages: List<SizedImage>): List<CollageLayout> {
-        val allPortrait = sizedImages.all { it.dimensions.isPortrait }
-        val allLandscape = sizedImages.all { it.dimensions.isLandscape }
-
-        return when {
-            allPortrait -> listOf(verticalStackLayout(sizedImages, "layout_vertical"))
-            allLandscape -> listOf(horizontalRowLayout(sizedImages, "layout_horizontal"))
-            else -> listOf(
-                horizontalRowLayout(sizedImages, "layout_horizontal"),
-                verticalStackLayout(sizedImages, "layout_vertical"),
-            )
-        }
+        return listOf(
+            horizontalProportionalRow(sizedImages, "layout_fit_2"),
+            verticalStackLayout(sizedImages, "layout_vertical"),
+            horizontalRowLayout(sizedImages, "layout_horizontal"),
+        )
     }
 
     private fun buildThreeImageCandidates(sizedImages: List<SizedImage>): List<CollageLayout> {
-        val allPortrait = sizedImages.all { it.dimensions.isPortrait }
-        val allLandscape = sizedImages.all { it.dimensions.isLandscape }
-
-        return when {
-            allPortrait -> listOf(
-                verticalStackLayout(sizedImages, "layout_vertical"),
-                leftBigRightStackLayout(sizedImages, "layout_left_big"),
-            )
-            allLandscape -> listOf(
-                horizontalRowLayout(sizedImages, "layout_horizontal"),
-                leftBigRightStackLayout(sizedImages, "layout_left_big"),
-            )
-            else -> listOf(
-                leftBigRightStackLayout(sizedImages, "layout_left_big"),
-                heroTopLayout(sizedImages, "layout_hero_top"),
-                verticalStackLayout(sizedImages, "layout_vertical"),
-            )
-        }
+        return listOf(
+            proportionalRowPackLayout(sizedImages, 3, "layout_fit_3"),
+            leftBigRightStackLayout(sizedImages, "layout_left_big"),
+            rightBigLeftStackLayout(sizedImages, "layout_hero_right"),
+            heroTopLayout(sizedImages, "layout_hero_top"),
+            verticalStackLayout(sizedImages, "layout_vertical"),
+            horizontalProportionalRow(sizedImages, "layout_horizontal"),
+        )
     }
 
     private fun singleLayout(sizedImages: List<SizedImage>): CollageLayout {
@@ -277,6 +350,118 @@ class CollageLayoutPlanner(
         )
     }
 
+    /** 右大图 + 左侧上下堆叠 */
+    private fun rightBigLeftStackLayout(sizedImages: List<SizedImage>, description: String): CollageLayout {
+        require(sizedImages.size == 3)
+
+        val rightWidth = ((canvasWidth - GAP) * 2) / 3
+        val leftWidth = canvasWidth - GAP - rightWidth
+
+        val rightHeight = fitHeight(rightWidth, sizedImages[2].dimensions.aspectRatio)
+        val leftTopHeight = fitHeight(leftWidth, sizedImages[0].dimensions.aspectRatio)
+        val leftBottomHeight = fitHeight(leftWidth, sizedImages[1].dimensions.aspectRatio)
+        val leftStackHeight = leftTopHeight + GAP + leftBottomHeight
+        val canvasHeight = max(rightHeight, leftStackHeight)
+
+        val cells = listOf(
+            CollageCell(0, 0, 0, leftWidth, leftTopHeight),
+            CollageCell(1, 0, leftTopHeight + GAP, leftWidth, leftBottomHeight),
+            CollageCell(2, leftWidth + GAP, 0, rightWidth, canvasHeight),
+        )
+
+        return CollageLayout(
+            canvasWidth = canvasWidth,
+            canvasHeight = canvasHeight,
+            cells = cells,
+            description = description,
+        )
+    }
+
+    /** 横向一行，按实际宽高比分配宽度，同行等高 */
+    private fun horizontalProportionalRow(sizedImages: List<SizedImage>, description: String): CollageLayout {
+        val totalGap = GAP * (sizedImages.size - 1)
+        val availableWidth = canvasWidth - totalGap
+        val totalAspect = sizedImages.sumOf { it.dimensions.aspectRatio.toDouble() }.toFloat()
+        val rowHeight = (availableWidth / totalAspect).toInt().coerceAtLeast(1)
+
+        var left = 0
+        val cells = sizedImages.mapIndexed { index, sized ->
+            val slotWidth = if (index == sizedImages.lastIndex) {
+                canvasWidth - left
+            } else {
+                (availableWidth * sized.dimensions.aspectRatio / totalAspect).toInt()
+            }
+            val cell = CollageCell(index, left, 0, slotWidth, rowHeight)
+            left += slotWidth + GAP
+            cell
+        }
+
+        return CollageLayout(
+            canvasWidth = canvasWidth,
+            canvasHeight = rowHeight,
+            cells = cells,
+            description = description,
+        )
+    }
+
+    /** 等比例行布局：每行按图片实际宽高比分配宽度，同行所有图片等高，最大程度减少裁切 */
+    private fun proportionalRowPackLayout(
+        sizedImages: List<SizedImage>,
+        columns: Int,
+        description: String,
+    ): CollageLayout {
+        val rowCount = ceil(sizedImages.size.toDouble() / columns).toInt()
+        var topOffset = 0
+        val cells = mutableListOf<CollageCell>()
+
+        for (row in 0 until rowCount) {
+            val start = row * columns
+            val end = minOf(start + columns, sizedImages.size)
+            val rowImages = sizedImages.subList(start, end)
+            val totalGap = GAP * (rowImages.size - 1)
+            val availableWidth = canvasWidth - totalGap
+            val totalAspect = rowImages.sumOf { it.dimensions.aspectRatio.toDouble() }.toFloat()
+            val rowHeight = (availableWidth / totalAspect).toInt().coerceAtLeast(1)
+
+            var left = 0
+            rowImages.forEachIndexed { col, sized ->
+                val slotWidth = if (col == rowImages.lastIndex) {
+                    canvasWidth - left
+                } else {
+                    (availableWidth * sized.dimensions.aspectRatio / totalAspect).toInt()
+                }
+                cells.add(
+                    CollageCell(
+                        imageIndex = start + col,
+                        left = left,
+                        top = topOffset,
+                        width = slotWidth,
+                        height = rowHeight,
+                    ),
+                )
+                left += slotWidth + GAP
+            }
+            topOffset += rowHeight
+            if (row < rowCount - 1) topOffset += GAP
+        }
+
+        return CollageLayout(
+            canvasWidth = canvasWidth,
+            canvasHeight = topOffset,
+            cells = cells,
+            description = description,
+        )
+    }
+
+    private fun guessSquareColumns(count: Int): Int {
+        return when {
+            count <= 1 -> 1
+            count <= 4 -> 2
+            count <= 9 -> 3
+            else -> 4
+        }
+    }
+
     private fun rowPackLayout(
         sizedImages: List<SizedImage>,
         columns: Int,
@@ -334,20 +519,25 @@ class CollageLayoutPlanner(
         val avgRowHeight = rowHeights.average().toFloat()
         val rowHeightVariance = rowHeights.sumOf { abs(it - avgRowHeight).toDouble() }.toFloat()
 
-        val portraitCount = sizedImages.count { it.dimensions.isPortrait }
-        val landscapeCount = sizedImages.count { it.dimensions.isLandscape }
-        val portraitRatio = portraitCount.toFloat() / sizedImages.size
-        val landscapeRatio = landscapeCount.toFloat() / sizedImages.size
-
-        val orientationMismatchPenalty = when {
-            layout.description.contains("horizontal") && portraitRatio > 0.6f -> totalHeight * 0.15f
-            layout.description.contains("vertical") && landscapeRatio > 0.6f -> totalHeight * 0.15f
-            else -> 0f
+        var cropPenalty = 0f
+        layout.cells.forEach { cell ->
+            val img = sizedImages.getOrNull(cell.imageIndex) ?: return@forEach
+            val cellRatio = cell.width.toFloat() / cell.height
+            val imgRatio = img.dimensions.aspectRatio
+            val cropRatio = if (imgRatio > cellRatio) {
+                1f - cellRatio / imgRatio
+            } else if (imgRatio < cellRatio) {
+                1f - imgRatio / cellRatio
+            } else {
+                0f
+            }
+            cropPenalty += cropRatio
         }
+        cropPenalty = cropPenalty / sizedImages.size * totalHeight * 0.5f
 
         return totalHeight +
             rowHeightVariance * 0.2f +
-            orientationMismatchPenalty
+            cropPenalty
     }
 
     companion object {

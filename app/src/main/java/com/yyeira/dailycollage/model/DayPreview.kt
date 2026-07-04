@@ -9,4 +9,9 @@ data class DayPreview(
     val previewBitmap: Bitmap,
     val images: List<GalleryImage>,
     val layout: CollageLayout,
-)
+    val cropOffsets: Map<Int, CropOffset> = emptyMap(),
+    val originalImages: List<GalleryImage> = images,
+) {
+    val isModified: Boolean
+        get() = images != originalImages || cropOffsets.isNotEmpty()
+}

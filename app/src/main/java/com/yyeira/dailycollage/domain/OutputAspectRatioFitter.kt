@@ -2,14 +2,12 @@ package com.yyeira.dailycollage.domain
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import com.yyeira.dailycollage.model.OutputAspectRatio
-import kotlin.math.min
+import kotlin.math.max
 
 object OutputAspectRatioFitter {
-    private val BACKGROUND_COLOR = Color.parseColor("#121212")
 
     fun apply(source: Bitmap, aspectRatio: OutputAspectRatio, canvasWidth: Int): Bitmap {
         if (aspectRatio.isNatural) {
@@ -22,9 +20,8 @@ object OutputAspectRatioFitter {
 
         val output = Bitmap.createBitmap(canvasWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        canvas.drawColor(BACKGROUND_COLOR)
 
-        val scale = min(
+        val scale = max(
             canvasWidth.toFloat() / source.width,
             targetHeight.toFloat() / source.height,
         )

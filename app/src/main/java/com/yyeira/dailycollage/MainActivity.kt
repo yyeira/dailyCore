@@ -8,9 +8,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,17 +53,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.yyeira.dailycollage.model.CollageLayout
+import com.yyeira.dailycollage.model.CropOffset
 import com.yyeira.dailycollage.model.DayPreview
 import com.yyeira.dailycollage.model.GalleryImage
 import com.yyeira.dailycollage.model.LayoutRule
@@ -108,6 +126,18 @@ fun CollageScreen(viewModel: CollageViewModel) {
         ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
         viewModel.onDeleteRequestResult(result.resultCode == Activity.RESULT_OK)
+    }
+
+    val addImageLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        viewModel.addImagesToDay(uris)
+    }
+
+    LaunchedEffect(uiState.pendingAddDateKey) {
+        if (uiState.pendingAddDateKey != null) {
+            addImageLauncher.launch("image/*")
+        }
     }
 
     LaunchedEffect(uiState.needsPermission) {
@@ -237,6 +267,18 @@ fun CollageScreen(viewModel: CollageViewModel) {
                         onMoveImage = { from, to ->
                             viewModel.moveImageInDay(preview.dateKey, from, to)
                         },
+                        onCropOffsetChanged = { index, offset ->
+                            viewModel.updateCropOffset(preview.dateKey, index, offset)
+                        },
+                        onRemoveImage = { index ->
+                            viewModel.removeImageFromDay(preview.dateKey, index)
+                        },
+                        onAddImages = {
+                            viewModel.requestAddImages(preview.dateKey)
+                        },
+                        onResetDay = {
+                            viewModel.resetDay(preview.dateKey)
+                        },
                     )
                 }
 
@@ -340,6 +382,7 @@ fun CollageScreen(viewModel: CollageViewModel) {
             DateRangePicker(state = pickerState, modifier = Modifier.fillMaxWidth())
         }
     }
+
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -378,9 +421,15 @@ private fun layoutRuleLabelRes(rule: LayoutRule): Int {
         LayoutRule.VERTICAL -> R.string.layout_rule_vertical
         LayoutRule.HORIZONTAL -> R.string.layout_rule_horizontal
         LayoutRule.HERO_TOP -> R.string.layout_rule_hero_top
+        LayoutRule.HERO_LEFT -> R.string.layout_rule_hero_left
+        LayoutRule.HERO_RIGHT -> R.string.layout_rule_hero_right
         LayoutRule.GRID_2 -> R.string.layout_rule_grid_2
         LayoutRule.GRID_3 -> R.string.layout_rule_grid_3
         LayoutRule.GRID_4 -> R.string.layout_rule_grid_4
+        LayoutRule.GRID_SQUARE -> R.string.layout_rule_grid_square
+        LayoutRule.FIT_2 -> R.string.layout_rule_fit_2
+        LayoutRule.FIT_3 -> R.string.layout_rule_fit_3
+        LayoutRule.FIT_4 -> R.string.layout_rule_fit_4
     }
 }
 
@@ -431,23 +480,49 @@ private fun PreviewDayCard(
     isRebuilding: Boolean,
     onSwapImages: (Int, Int) -> Unit,
     onMoveImage: (Int, Int) -> Unit,
+    onCropOffsetChanged: (Int, CropOffset) -> Unit,
+    onRemoveImage: (Int) -> Unit,
+    onAddImages: () -> Unit,
+    onResetDay: () -> Unit,
 ) {
     var selectedIndex by remember(preview.dateKey) { mutableStateOf<Int?>(null) }
+    var previewImageSize by remember { mutableStateOf(IntSize.Zero) }
+    var showZoomDialog by remember { mutableStateOf(false) }
+    var editingIndex by remember(preview.dateKey) { mutableStateOf(-1) }
+
+    val cellRects = remember(preview.layout, preview.previewBitmap.width, preview.previewBitmap.height) {
+        computeNormalizedCellRects(preview.layout, preview.previewBitmap.width, preview.previewBitmap.height)
+    }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = stringResource(
-                    R.string.preview_day_label,
-                    preview.dateKey,
-                    preview.imageCount,
-                    preview.layoutDescription,
-                ),
-                style = MaterialTheme.typography.titleSmall,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = stringResource(
+                        R.string.preview_day_label,
+                        preview.dateKey,
+                        preview.imageCount,
+                        preview.layoutDescription,
+                    ),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (preview.isModified) {
+                    TextButton(
+                        onClick = onResetDay,
+                        enabled = !isRebuilding,
+                    ) {
+                        Text(stringResource(R.string.reset_day))
+                    }
+                }
+            }
 
             Box(
                 modifier = Modifier.fillMaxWidth(),
@@ -456,7 +531,26 @@ private fun PreviewDayCard(
                 Image(
                     bitmap = preview.previewBitmap.asImageBitmap(),
                     contentDescription = preview.dateKey,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { previewImageSize = it }
+                        .pointerInput(isRebuilding, preview.layout) {
+                            if (isRebuilding) return@pointerInput
+                            detectTapGestures(
+                                onDoubleTap = { showZoomDialog = true },
+                                onTap = { tapOffset ->
+                                    val w = previewImageSize.width
+                                    val h = previewImageSize.height
+                                    if (w <= 0 || h <= 0) return@detectTapGestures
+                                    val normX = tapOffset.x / w
+                                    val normY = tapOffset.y / h
+                                    val tappedIndex = hitTestCell(cellRects, normX, normY)
+                                    if (tappedIndex >= 0) {
+                                        editingIndex = tappedIndex
+                                    }
+                                },
+                            )
+                        },
                     contentScale = ContentScale.Fit,
                 )
                 if (isRebuilding) {
@@ -464,19 +558,19 @@ private fun PreviewDayCard(
                 }
             }
 
-            if (preview.images.size > 1) {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    itemsIndexed(preview.images, key = { _, image -> image.uri }) { index, image ->
-                        ImageOrderEditorItem(
-                            image = image,
-                            index = index,
-                            total = preview.images.size,
-                            isSelected = selectedIndex == index,
-                            enabled = !isRebuilding,
-                            onClick = {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                itemsIndexed(preview.images, key = { _, image -> image.uri }) { index, image ->
+                    ImageOrderEditorItem(
+                        image = image,
+                        index = index,
+                        total = preview.images.size,
+                        isSelected = selectedIndex == index,
+                        enabled = !isRebuilding,
+                        onClick = {
+                            if (preview.images.size > 1) {
                                 when (val selected = selectedIndex) {
                                     null -> selectedIndex = index
                                     index -> selectedIndex = null
@@ -485,21 +579,229 @@ private fun PreviewDayCard(
                                         selectedIndex = null
                                     }
                                 }
-                            },
-                            onMoveLeft = {
-                                if (index > 0) {
-                                    onMoveImage(index, index - 1)
-                                    selectedIndex = index - 1
-                                }
-                            },
-                            onMoveRight = {
-                                if (index < preview.images.lastIndex) {
-                                    onMoveImage(index, index + 1)
-                                    selectedIndex = index + 1
-                                }
-                            },
-                        )
+                            }
+                        },
+                        onMoveLeft = {
+                            if (index > 0) {
+                                onMoveImage(index, index - 1)
+                                selectedIndex = index - 1
+                            }
+                        },
+                        onMoveRight = {
+                            if (index < preview.images.lastIndex) {
+                                onMoveImage(index, index + 1)
+                                selectedIndex = index + 1
+                            }
+                        },
+                        onOpenCropEditor = {
+                            editingIndex = index
+                        },
+                        onRemove = {
+                            onRemoveImage(index)
+                            if (selectedIndex == index) selectedIndex = null
+                        },
+                    )
+                }
+
+                item(key = "add_button") {
+                    AddImageButton(
+                        enabled = !isRebuilding,
+                        onClick = onAddImages,
+                    )
+                }
+            }
+        }
+    }
+
+    if (showZoomDialog) {
+        ZoomablePreviewDialog(
+            bitmap = preview.previewBitmap,
+            onDismiss = { showZoomDialog = false },
+        )
+    }
+
+    if (editingIndex >= 0 && editingIndex in preview.images.indices) {
+        val cell = preview.layout.cells.firstOrNull { it.imageIndex == editingIndex }
+        if (cell != null) {
+            CropEditorDialog(
+                imageUri = preview.images[editingIndex].uri,
+                cellAspectRatio = cell.width.toFloat() / cell.height.coerceAtLeast(1),
+                currentOffset = preview.cropOffsets[editingIndex] ?: CropOffset.CENTER,
+                onConfirm = { offset ->
+                    onCropOffsetChanged(editingIndex, offset)
+                    editingIndex = -1
+                },
+                onDismiss = { editingIndex = -1 },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CropEditorDialog(
+    imageUri: Uri,
+    cellAspectRatio: Float,
+    currentOffset: CropOffset,
+    onConfirm: (CropOffset) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+
+    var baseZoom by remember { mutableFloatStateOf(1f) }
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var panX by remember { mutableFloatStateOf(0f) }
+    var panY by remember { mutableFloatStateOf(0f) }
+    var initialized by remember { mutableStateOf(false) }
+
+    LaunchedEffect(imageUri) {
+        bitmap = withContext(Dispatchers.IO) {
+            ThumbnailDecoder.decodeLarge(context.contentResolver, imageUri, 1200)
+        }
+    }
+
+    val frameLeft: Float
+    val frameTop: Float
+    val frameW: Float
+    val frameH: Float
+    if (containerSize.width > 0 && containerSize.height > 0) {
+        val maxW = containerSize.width * 0.85f
+        val maxH = containerSize.height * 0.6f
+        if (maxW / cellAspectRatio <= maxH) {
+            frameW = maxW
+            frameH = maxW / cellAspectRatio
+        } else {
+            frameH = maxH
+            frameW = maxH * cellAspectRatio
+        }
+        frameLeft = (containerSize.width - frameW) / 2f
+        frameTop = (containerSize.height - frameH) / 2f
+    } else {
+        frameLeft = 0f; frameTop = 0f; frameW = 0f; frameH = 0f
+    }
+
+    LaunchedEffect(bitmap, containerSize) {
+        val bmp = bitmap ?: return@LaunchedEffect
+        if (containerSize.width <= 0 || frameW <= 0f) return@LaunchedEffect
+        if (initialized) return@LaunchedEffect
+        val imgW = bmp.width.toFloat()
+        val imgH = bmp.height.toFloat()
+        val fitScale = minOf(containerSize.width / imgW, containerSize.height / imgH)
+        val imageFitW = imgW * fitScale
+        val imageFitH = imgH * fitScale
+        baseZoom = maxOf(frameW / imageFitW, frameH / imageFitH)
+
+        val initZoom = baseZoom * currentOffset.scale.coerceAtLeast(1f)
+        zoom = initZoom
+        val panMaxX = ((imageFitW * initZoom - frameW) / 2f).coerceAtLeast(0f)
+        val panMaxY = ((imageFitH * initZoom - frameH) / 2f).coerceAtLeast(0f)
+        panX = ((0.5f - currentOffset.x) * 2f * panMaxX).coerceIn(-panMaxX, panMaxX)
+        panY = ((0.5f - currentOffset.y) * 2f * panMaxY).coerceIn(-panMaxY, panMaxY)
+        initialized = true
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .onSizeChanged { containerSize = it }
+                .pointerInput(baseZoom) {
+                    detectTransformGestures { _, pan, gestureZoom, _ ->
+                        val bmp = bitmap ?: return@detectTransformGestures
+                        if (containerSize.width <= 0 || frameW <= 0f) return@detectTransformGestures
+                        val newZoom = (zoom * gestureZoom).coerceIn(baseZoom, baseZoom * 5f)
+                        zoom = newZoom
+                        val imgW = bmp.width.toFloat()
+                        val imgH = bmp.height.toFloat()
+                        val fitScale = minOf(containerSize.width / imgW, containerSize.height / imgH)
+                        val pmX = ((imgW * fitScale * newZoom - frameW) / 2f).coerceAtLeast(0f)
+                        val pmY = ((imgH * fitScale * newZoom - frameH) / 2f).coerceAtLeast(0f)
+                        panX = (panX + pan.x).coerceIn(-pmX, pmX)
+                        panY = (panY + pan.y).coerceIn(-pmY, pmY)
                     }
+                },
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = zoom,
+                            scaleY = zoom,
+                            translationX = panX,
+                            translationY = panY,
+                        ),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                    color = Color.White,
+                )
+            }
+
+            if (frameW > 0f) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val dim = Color.Black.copy(alpha = 0.55f)
+                    drawRect(dim, Offset.Zero, Size(size.width, frameTop))
+                    drawRect(dim, Offset(0f, frameTop + frameH), Size(size.width, size.height - frameTop - frameH))
+                    drawRect(dim, Offset(0f, frameTop), Size(frameLeft, frameH))
+                    drawRect(dim, Offset(frameLeft + frameW, frameTop), Size(size.width - frameLeft - frameW, frameH))
+                    drawRect(Color.White, Offset(frameLeft, frameTop), Size(frameW, frameH), style = Stroke(2.dp.toPx()))
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 48.dp, end = 16.dp)
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White.copy(alpha = 0.25f))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("✕", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            }
+
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 48.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(android.R.string.cancel), color = Color.White)
+                }
+                TextButton(onClick = {
+                    zoom = baseZoom
+                    panX = 0f
+                    panY = 0f
+                }) {
+                    Text(stringResource(R.string.crop_editor_reset), color = Color.White)
+                }
+                Button(onClick = {
+                    val bmp = bitmap ?: return@Button
+                    if (containerSize.width <= 0 || frameW <= 0f) return@Button
+                    val imgW = bmp.width.toFloat()
+                    val imgH = bmp.height.toFloat()
+                    val fitScale = minOf(containerSize.width / imgW, containerSize.height / imgH)
+                    val pmX = ((imgW * fitScale * zoom - frameW) / 2f).coerceAtLeast(0f)
+                    val pmY = ((imgH * fitScale * zoom - frameH) / 2f).coerceAtLeast(0f)
+                    val scale = zoom / baseZoom
+                    val normX = if (pmX > 0f) (0.5f - panX / (2f * pmX)).coerceIn(0f, 1f) else 0.5f
+                    val normY = if (pmY > 0f) (0.5f - panY / (2f * pmY)).coerceIn(0f, 1f) else 0.5f
+                    onConfirm(CropOffset(normX, normY, scale).coerced())
+                }) {
+                    Text(stringResource(R.string.crop_editor_confirm))
                 }
             }
         }
@@ -516,6 +818,8 @@ private fun ImageOrderEditorItem(
     onClick: () -> Unit,
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
+    onOpenCropEditor: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val context = LocalContext.current
     var thumbnail by remember(image.uri) { mutableStateOf<android.graphics.Bitmap?>(null) }
@@ -556,6 +860,26 @@ private fun ImageOrderEditorItem(
             } else {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
             }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(bottomStart = 8.dp))
+                    .clickable(enabled = enabled, onClick = onRemove)
+                    .padding(2.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "×",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .size(16.dp)
+                        .padding(0.dp),
+                )
+            }
         }
 
         Text(
@@ -567,19 +891,198 @@ private fun ImageOrderEditorItem(
             IconButton(
                 onClick = onMoveLeft,
                 enabled = enabled && index > 0,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(24.dp),
             ) {
-                Text("←")
+                Text("←", style = MaterialTheme.typography.labelSmall)
+            }
+            IconButton(
+                onClick = onOpenCropEditor,
+                enabled = enabled,
+                modifier = Modifier.size(24.dp),
+            ) {
+                Text("✎", style = MaterialTheme.typography.labelSmall)
             }
             IconButton(
                 onClick = onMoveRight,
                 enabled = enabled && index < total - 1,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(24.dp),
             ) {
-                Text("→")
+                Text("→", style = MaterialTheme.typography.labelSmall)
             }
         }
     }
+}
+
+@Composable
+private fun AddImageButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    shape = RoundedCornerShape(8.dp),
+                )
+                .clickable(enabled = enabled, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "+",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Text(
+            text = stringResource(R.string.add_images),
+            style = MaterialTheme.typography.labelSmall,
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+@Composable
+private fun ZoomablePreviewDialog(
+    bitmap: android.graphics.Bitmap,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember { mutableStateOf(1f) }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            if (scale > 1.5f) {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            } else {
+                                scale = 3f
+                            }
+                        },
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val newScale = (scale * zoom).coerceIn(1f, 5f)
+                        scale = newScale
+                        if (newScale > 1f) {
+                            val maxX = (newScale - 1f) * size.width / 2f
+                            val maxY = (newScale - 1f) * size.height / 2f
+                            offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                            offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                        } else {
+                            offsetX = 0f
+                            offsetY = 0f
+                        }
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offsetX,
+                        translationY = offsetY,
+                    ),
+                contentScale = ContentScale.Fit,
+            )
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White.copy(alpha = 0.3f))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "✕",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+        }
+    }
+}
+
+private const val PREVIEW_CANVAS_WIDTH = 360
+
+private data class NormalizedCellRect(
+    val imageIndex: Int,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+)
+
+/**
+ * Maps layout cells to normalized (0..1) coordinates in the final preview bitmap,
+ * accounting for the OutputAspectRatioFitter center-crop transformation.
+ */
+private fun computeNormalizedCellRects(
+    layout: CollageLayout,
+    bitmapWidth: Int,
+    bitmapHeight: Int,
+): List<NormalizedCellRect> {
+    val layoutScale = PREVIEW_CANVAS_WIDTH.toFloat() / layout.canvasWidth
+    val naturalHeight = layout.canvasHeight * layoutScale
+
+    val fitterScale = maxOf(bitmapWidth / PREVIEW_CANVAS_WIDTH.toFloat(), bitmapHeight / naturalHeight)
+    val drawWidth = PREVIEW_CANVAS_WIDTH * fitterScale
+    val drawHeight = naturalHeight * fitterScale
+    val offsetX = (bitmapWidth - drawWidth) / 2f
+    val offsetY = (bitmapHeight - drawHeight) / 2f
+
+    return layout.cells.map { cell ->
+        val cellLeft = cell.left * layoutScale * fitterScale + offsetX
+        val cellTop = cell.top * layoutScale * fitterScale + offsetY
+        val cellWidth = cell.width * layoutScale * fitterScale
+        val cellHeight = cell.height * layoutScale * fitterScale
+
+        NormalizedCellRect(
+            imageIndex = cell.imageIndex,
+            left = cellLeft / bitmapWidth,
+            top = cellTop / bitmapHeight,
+            right = (cellLeft + cellWidth) / bitmapWidth,
+            bottom = (cellTop + cellHeight) / bitmapHeight,
+        )
+    }
+}
+
+private fun hitTestCell(
+    cellRects: List<NormalizedCellRect>,
+    normX: Float,
+    normY: Float,
+): Int {
+    return cellRects.firstOrNull { rect ->
+        normX in rect.left..rect.right && normY in rect.top..rect.bottom
+    }?.imageIndex ?: -1
 }
 
 private fun Long.toLocalDate(): LocalDate {

@@ -7,6 +7,10 @@ import android.net.Uri
 import kotlin.math.max
 
 object ThumbnailDecoder {
+    fun decodeLarge(contentResolver: ContentResolver, uri: Uri, maxSize: Int = 1200): Bitmap? {
+        return decode(contentResolver, uri, maxSize)
+    }
+
     fun decode(contentResolver: ContentResolver, uri: Uri, maxSize: Int = 160): Bitmap? {
         contentResolver.openInputStream(uri)?.use { inputStream ->
             val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
