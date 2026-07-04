@@ -36,6 +36,13 @@
     <string name="layout_fit_2">双列等高</string>
     <string name="layout_fit_3">三列等高</string>
     <string name="layout_fit_4">四列等高</string>
+    <string name="settings_expand">修改设置 ▾</string>
+    <string name="settings_collapse">收起设置 ▴</string>
+    <string name="album_selector_title">选择图库</string>
+    <string name="album_all">全部图库</string>
+    <string name="album_item">%1$s (%2$d)</string>
+    <string name="album_loading">正在加载图库…</string>
+    <string name="album_empty">所选日期范围内没有找到图库</string>
     <string name="layout_rule_title">布局规则</string>
     <string name="layout_rule_auto">智能推荐</string>
     <string name="layout_rule_vertical">竖向排列</string>
@@ -52,7 +59,7 @@
     <string name="layout_rule_fit_4">四列等高</string>
     <string name="edit_preview_hint">双击预览图进入全屏操作 · 点击缩略图交换位置</string>
     <string name="zoom_hint_select">点击选中 · 长按拖动交换 · 双指缩放</string>
-    <string name="zoom_hint_swap">再次点击编辑裁切 · 点击另一张交换位置</string>
+    <string name="zoom_hint_swap">双指缩放/拖动调整裁切 · 点击另一张交换</string>
     <string name="zoom_hint_drag">拖到另一张图片松手交换</string>
     <string name="crop_editor_title">调整显示区域</string>
     <string name="crop_editor_confirm">确认</string>

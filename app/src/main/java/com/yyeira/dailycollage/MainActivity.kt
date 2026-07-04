@@ -57,7 +57,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -76,6 +78,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.yyeira.dailycollage.model.Album
 import com.yyeira.dailycollage.model.CollageLayout
 import com.yyeira.dailycollage.model.CropOffset
 import com.yyeira.dailycollage.model.DayPreview
@@ -85,6 +88,7 @@ import com.yyeira.dailycollage.model.OutputAspectRatio
 import com.yyeira.dailycollage.util.PermissionHelper
 import com.yyeira.dailycollage.util.ThumbnailDecoder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
@@ -153,6 +157,13 @@ fun CollageScreen(viewModel: CollageViewModel) {
         viewModel.clearPendingDeleteIntent()
     }
 
+    val hasPreviews = uiState.previews.isNotEmpty()
+    var settingsExpanded by remember { mutableStateOf(true) }
+
+    LaunchedEffect(hasPreviews) {
+        if (hasPreviews) settingsExpanded = false
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(title = { Text(stringResource(R.string.app_name)) })
@@ -163,69 +174,136 @@ fun CollageScreen(viewModel: CollageViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
                 Spacer(modifier = Modifier.height(0.dp))
             }
 
-            item {
-                OutlinedButton(
-                    onClick = { showDatePicker = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
-                ) {
-                    val label = when {
-                        uiState.startDate != null && uiState.endDate != null -> {
-                            "${uiState.startDate!!.format(dateFormatter)} ~ ${uiState.endDate!!.format(dateFormatter)}"
+            if (hasPreviews && !settingsExpanded) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { settingsExpanded = true },
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val datePart = if (uiState.startDate != null && uiState.endDate != null) {
+                                "${uiState.startDate!!.format(dateFormatter)} ~ ${uiState.endDate!!.format(dateFormatter)}"
+                            } else ""
+                            val albumPart = if (uiState.selectedAlbumIds.isEmpty()) {
+                                stringResource(R.string.album_all)
+                            } else {
+                                uiState.availableAlbums
+                                    .filter { it.bucketId in uiState.selectedAlbumIds }
+                                    .joinToString("、") { it.displayName }
+                            }
+                            Text(
+                                text = "$datePart · $albumPart",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_expand),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                         }
-                        else -> stringResource(R.string.select_date_range)
                     }
-                    Text(label)
                 }
             }
 
-            item {
-                LayoutRuleSelector(
-                    selectedRule = uiState.layoutRule,
-                    onRuleSelected = viewModel::setLayoutRule,
-                    enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
-                )
-            }
+            if (!hasPreviews || settingsExpanded) {
+                item {
+                    OutlinedButton(
+                        onClick = { showDatePicker = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                    ) {
+                        val label = when {
+                            uiState.startDate != null && uiState.endDate != null -> {
+                                "${uiState.startDate!!.format(dateFormatter)} ~ ${uiState.endDate!!.format(dateFormatter)}"
+                            }
+                            else -> stringResource(R.string.select_date_range)
+                        }
+                        Text(label)
+                    }
+                }
 
-            item {
-                OutputAspectRatioSelector(
-                    selectedRatio = uiState.outputAspectRatio,
-                    onRatioSelected = viewModel::setOutputAspectRatio,
-                    enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
-                )
-            }
+                if (uiState.startDate != null && uiState.endDate != null) {
+                    item {
+                        AlbumSelector(
+                            albums = uiState.availableAlbums,
+                            selectedIds = uiState.selectedAlbumIds,
+                            isLoading = uiState.isLoadingAlbums,
+                            enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                            onToggle = viewModel::toggleAlbum,
+                            onSelectAll = viewModel::selectAllAlbums,
+                        )
+                    }
+                }
 
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.delete_originals),
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = uiState.deleteOriginalsAfterCollage,
-                        onCheckedChange = viewModel::setDeleteOriginalsAfterCollage,
+                item {
+                    LayoutRuleSelector(
+                        selectedRule = uiState.layoutRule,
+                        onRuleSelected = viewModel::setLayoutRule,
                         enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
                     )
                 }
-            }
 
-            item {
-                OutlinedButton(
-                    onClick = { viewModel.generatePreview() },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
-                ) {
-                    Text(stringResource(R.string.generate_preview))
+                item {
+                    OutputAspectRatioSelector(
+                        selectedRatio = uiState.outputAspectRatio,
+                        onRatioSelected = viewModel::setOutputAspectRatio,
+                        enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                    )
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.delete_originals),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(
+                            checked = uiState.deleteOriginalsAfterCollage,
+                            onCheckedChange = viewModel::setDeleteOriginalsAfterCollage,
+                            enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                        )
+                    }
+                }
+
+                item {
+                    OutlinedButton(
+                        onClick = { viewModel.generatePreview() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                    ) {
+                        Text(stringResource(R.string.generate_preview))
+                    }
+                }
+
+                if (hasPreviews) {
+                    item {
+                        TextButton(
+                            onClick = { settingsExpanded = false },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.settings_collapse))
+                        }
+                    }
                 }
             }
 
@@ -384,6 +462,58 @@ fun CollageScreen(viewModel: CollageViewModel) {
         }
     }
 
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AlbumSelector(
+    albums: List<Album>,
+    selectedIds: Set<Long>,
+    isLoading: Boolean,
+    enabled: Boolean,
+    onToggle: (Long) -> Unit,
+    onSelectAll: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = stringResource(R.string.album_selector_title),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        when {
+            isLoading -> Text(
+                text = stringResource(R.string.album_loading),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            albums.isEmpty() -> Text(
+                text = stringResource(R.string.album_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = selectedIds.isEmpty(),
+                    onClick = onSelectAll,
+                    enabled = enabled,
+                    label = { Text(stringResource(R.string.album_all)) },
+                )
+                albums.forEach { album ->
+                    FilterChip(
+                        selected = album.bucketId in selectedIds,
+                        onClick = { onToggle(album.bucketId) },
+                        enabled = enabled,
+                        label = {
+                            Text(stringResource(R.string.album_item, album.displayName, album.imageCount))
+                        },
+                    )
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -959,6 +1089,17 @@ private fun ZoomablePreviewDialog(
     var isDraggingImage by remember { mutableStateOf(false) }
     var dragSourceIndex by remember { mutableStateOf(-1) }
     var dragTargetIndex by remember { mutableStateOf(-1) }
+    var pendingCrop by remember { mutableStateOf<Pair<Int, CropOffset>?>(null) }
+
+    val currentCropOffsets by rememberUpdatedState(preview.cropOffsets)
+    val currentOnCropChanged by rememberUpdatedState(onCropOffsetChanged)
+
+    LaunchedEffect(pendingCrop) {
+        val (idx, offset) = pendingCrop ?: return@LaunchedEffect
+        delay(150)
+        currentOnCropChanged(idx, offset)
+        pendingCrop = null
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -1020,16 +1161,45 @@ private fun ZoomablePreviewDialog(
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         if (isDraggingImage) return@detectTransformGestures
-                        val newScale = (scale * zoom).coerceIn(1f, 5f)
-                        scale = newScale
-                        if (newScale > 1f) {
-                            val maxX = (newScale - 1f) * size.width / 2f
-                            val maxY = (newScale - 1f) * size.height / 2f
-                            offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
-                            offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+
+                        val selIdx = selectedCellIndex
+                        if (selIdx >= 0) {
+                            val rect = cellRects.firstOrNull { it.imageIndex == selIdx }
+                            if (rect != null) {
+                                val base = pendingCrop?.let { (i, o) ->
+                                    if (i == selIdx) o else null
+                                } ?: currentCropOffsets[selIdx] ?: CropOffset.CENTER
+
+                                val newCropScale = (base.scale * zoom).coerceIn(1f, 5f)
+                                val bw = preview.previewBitmap.width.toFloat()
+                                val bh = preview.previewBitmap.height.toFloat()
+                                val fitSc = minOf(
+                                    size.width.toFloat() / bw,
+                                    size.height.toFloat() / bh,
+                                )
+                                val cellW = (rect.right - rect.left) * bw * fitSc * scale
+                                val cellH = (rect.bottom - rect.top) * bh * fitSc * scale
+                                val sensX = if (cellW > 0) 1f / (cellW * base.scale) else 0f
+                                val sensY = if (cellH > 0) 1f / (cellH * base.scale) else 0f
+
+                                pendingCrop = selIdx to CropOffset(
+                                    x = (base.x - pan.x * sensX).coerceIn(0f, 1f),
+                                    y = (base.y - pan.y * sensY).coerceIn(0f, 1f),
+                                    scale = newCropScale,
+                                )
+                            }
                         } else {
-                            offsetX = 0f
-                            offsetY = 0f
+                            val newScale = (scale * zoom).coerceIn(1f, 5f)
+                            scale = newScale
+                            if (newScale > 1f) {
+                                val maxX = (newScale - 1f) * size.width / 2f
+                                val maxY = (newScale - 1f) * size.height / 2f
+                                offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                                offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
                         }
                     }
                 }
