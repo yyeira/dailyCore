@@ -615,7 +615,10 @@ private fun PreviewDayCard(
 
     if (showZoomDialog) {
         ZoomablePreviewDialog(
-            bitmap = preview.previewBitmap,
+            preview = preview,
+            cellRects = cellRects,
+            isRebuilding = isRebuilding,
+            onSwapImages = onSwapImages,
             onDismiss = { showZoomDialog = false },
         )
     }
@@ -952,12 +955,16 @@ private fun AddImageButton(
 
 @Composable
 private fun ZoomablePreviewDialog(
-    bitmap: android.graphics.Bitmap,
+    preview: DayPreview,
+    cellRects: List<NormalizedCellRect>,
+    isRebuilding: Boolean,
+    onSwapImages: (Int, Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
+    var selectedCellIndex by remember { mutableStateOf(-1) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -967,7 +974,9 @@ private fun ZoomablePreviewDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .pointerInput(Unit) {
+                .pointerInput(cellRects) {
+                    val boxW = size.width.toFloat()
+                    val boxH = size.height.toFloat()
                     detectTapGestures(
                         onDoubleTap = {
                             if (scale > 1.5f) {
@@ -976,6 +985,37 @@ private fun ZoomablePreviewDialog(
                                 offsetY = 0f
                             } else {
                                 scale = 3f
+                            }
+                        },
+                        onTap = { tapOffset ->
+                            val bw = preview.previewBitmap.width.toFloat()
+                            val bh = preview.previewBitmap.height.toFloat()
+                            val fitScale = minOf(boxW / bw, boxH / bh)
+                            val dw = bw * fitScale
+                            val dh = bh * fitScale
+                            val dl = (boxW - dw) / 2f
+                            val dt = (boxH - dh) / 2f
+                            val cx = boxW / 2f
+                            val cy = boxH / 2f
+
+                            val lx = (tapOffset.x - cx - offsetX) / scale + cx
+                            val ly = (tapOffset.y - cy - offsetY) / scale + cy
+                            val normX = (lx - dl) / dw
+                            val normY = (ly - dt) / dh
+
+                            val cellIndex = hitTestCell(cellRects, normX, normY)
+                            if (cellIndex >= 0) {
+                                val selected = selectedCellIndex
+                                when {
+                                    selected < 0 -> selectedCellIndex = cellIndex
+                                    selected == cellIndex -> selectedCellIndex = -1
+                                    else -> {
+                                        onSwapImages(selected, cellIndex)
+                                        selectedCellIndex = -1
+                                    }
+                                }
+                            } else {
+                                selectedCellIndex = -1
                             }
                         },
                     )
@@ -997,24 +1037,59 @@ private fun ZoomablePreviewDialog(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = null,
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offsetX,
-                        translationY = offsetY,
-                    ),
-                contentScale = ContentScale.Fit,
-            )
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offsetX
+                        translationY = offsetY
+                    },
+            ) {
+                Image(
+                    bitmap = preview.previewBitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val selIdx = selectedCellIndex
+                    if (selIdx < 0) return@Canvas
+                    val bw = preview.previewBitmap.width.toFloat()
+                    val bh = preview.previewBitmap.height.toFloat()
+                    val cs = minOf(size.width / bw, size.height / bh)
+                    val dw = bw * cs
+                    val dh = bh * cs
+                    val dl = (size.width - dw) / 2f
+                    val dt = (size.height - dh) / 2f
+
+                    val rect = cellRects.firstOrNull { it.imageIndex == selIdx }
+                        ?: return@Canvas
+                    drawRect(
+                        color = Color.Yellow.copy(alpha = 0.85f),
+                        topLeft = Offset(
+                            dl + rect.left * dw,
+                            dt + rect.top * dh,
+                        ),
+                        size = Size(
+                            (rect.right - rect.left) * dw,
+                            (rect.bottom - rect.top) * dh,
+                        ),
+                        style = Stroke(width = 3.dp.toPx()),
+                    )
+                }
+            }
+
+            if (isRebuilding) {
+                CircularProgressIndicator(color = Color.White)
+            }
 
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(16.dp)
+                    .padding(top = 48.dp, end = 16.dp)
                     .size(40.dp)
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color.White.copy(alpha = 0.3f))
@@ -1025,6 +1100,21 @@ private fun ZoomablePreviewDialog(
                     text = "✕",
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium,
+                )
+            }
+
+            if (preview.images.size > 1) {
+                Text(
+                    text = if (selectedCellIndex >= 0) {
+                        stringResource(R.string.zoom_hint_swap)
+                    } else {
+                        stringResource(R.string.zoom_hint_select)
+                    },
+                    color = Color.White.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 48.dp),
                 )
             }
         }
