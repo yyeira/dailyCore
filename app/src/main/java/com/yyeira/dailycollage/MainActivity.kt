@@ -486,7 +486,6 @@ private fun PreviewDayCard(
     onResetDay: () -> Unit,
 ) {
     var selectedIndex by remember(preview.dateKey) { mutableStateOf<Int?>(null) }
-    var previewImageSize by remember { mutableStateOf(IntSize.Zero) }
     var showZoomDialog by remember { mutableStateOf(false) }
     var editingIndex by remember(preview.dateKey) { mutableStateOf(-1) }
 
@@ -533,22 +532,10 @@ private fun PreviewDayCard(
                     contentDescription = preview.dateKey,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .onSizeChanged { previewImageSize = it }
-                        .pointerInput(isRebuilding, preview.layout) {
+                        .pointerInput(isRebuilding) {
                             if (isRebuilding) return@pointerInput
                             detectTapGestures(
                                 onDoubleTap = { showZoomDialog = true },
-                                onTap = { tapOffset ->
-                                    val w = previewImageSize.width
-                                    val h = previewImageSize.height
-                                    if (w <= 0 || h <= 0) return@detectTapGestures
-                                    val normX = tapOffset.x / w
-                                    val normY = tapOffset.y / h
-                                    val tappedIndex = hitTestCell(cellRects, normX, normY)
-                                    if (tappedIndex >= 0) {
-                                        editingIndex = tappedIndex
-                                    }
-                                },
                             )
                         },
                     contentScale = ContentScale.Fit,
