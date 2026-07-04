@@ -12,6 +12,7 @@ import com.yyeira.dailycollage.domain.CollageLayoutPlanner
 import com.yyeira.dailycollage.domain.GridCollageMaker
 import com.yyeira.dailycollage.domain.ImageDimensionResolver
 import com.yyeira.dailycollage.domain.ImageGrouper
+import com.yyeira.dailycollage.model.Album
 import com.yyeira.dailycollage.model.CropOffset
 import com.yyeira.dailycollage.model.DayPreview
 import com.yyeira.dailycollage.model.GalleryImage
@@ -33,6 +34,9 @@ import kotlinx.coroutines.withContext
 data class CollageUiState(
     val startDate: LocalDate? = null,
     val endDate: LocalDate? = null,
+    val availableAlbums: List<Album> = emptyList(),
+    val selectedAlbumIds: Set<Long> = emptySet(),
+    val isLoadingAlbums: Boolean = false,
     val layoutRule: LayoutRule = LayoutRule.AUTO,
     val outputAspectRatio: OutputAspectRatio = OutputAspectRatio.NATURAL,
     val deleteOriginalsAfterCollage: Boolean = false,
@@ -80,11 +84,44 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             it.copy(
                 startDate = startDate,
                 endDate = endDate,
+                availableAlbums = emptyList(),
+                selectedAlbumIds = emptySet(),
                 resultMessage = null,
                 errorMessage = null,
                 warningMessage = null,
             )
         }
+        if (startDate != null && endDate != null) {
+            loadAlbums(startDate, endDate)
+        }
+    }
+
+    private fun loadAlbums(startDate: LocalDate, endDate: LocalDate) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAlbums = true) }
+            try {
+                val albums = withContext(Dispatchers.IO) {
+                    galleryRepository.queryAlbums(startDate, endDate)
+                }
+                _uiState.update { it.copy(availableAlbums = albums, isLoadingAlbums = false) }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(isLoadingAlbums = false) }
+            }
+        }
+    }
+
+    fun toggleAlbum(bucketId: Long) {
+        clearPreviews()
+        _uiState.update {
+            val newIds = it.selectedAlbumIds.toMutableSet()
+            if (bucketId in newIds) newIds.remove(bucketId) else newIds.add(bucketId)
+            it.copy(selectedAlbumIds = newIds)
+        }
+    }
+
+    fun selectAllAlbums() {
+        clearPreviews()
+        _uiState.update { it.copy(selectedAlbumIds = emptySet()) }
     }
 
     fun setLayoutRule(rule: LayoutRule) {
@@ -134,8 +171,9 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             }
 
             try {
+                val albumFilter = state.selectedAlbumIds.ifEmpty { null }
                 val previews = withContext(Dispatchers.IO) {
-                    buildPreviews(startDate, endDate, state.layoutRule, state.outputAspectRatio)
+                    buildPreviews(startDate, endDate, state.layoutRule, state.outputAspectRatio, albumFilter)
                 }
                 _uiState.update {
                     it.copy(
@@ -466,8 +504,9 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
         endDate: LocalDate,
         layoutRule: LayoutRule,
         outputAspectRatio: OutputAspectRatio,
+        bucketIds: Set<Long>? = null,
     ): List<DayPreview> {
-        val images = galleryRepository.queryImages(startDate, endDate)
+        val images = galleryRepository.queryImages(startDate, endDate, bucketIds)
         if (images.isEmpty()) {
             throw NoImagesException()
         }
