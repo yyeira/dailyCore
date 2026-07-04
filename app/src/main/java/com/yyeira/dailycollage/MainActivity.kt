@@ -1094,6 +1094,7 @@ private fun ZoomablePreviewDialog(
 
     LaunchedEffect(pendingCrop) {
         val (idx, offset) = pendingCrop ?: return@LaunchedEffect
+        delay(150)
         currentOnCropChanged(idx, offset)
         pendingCrop = null
     }
