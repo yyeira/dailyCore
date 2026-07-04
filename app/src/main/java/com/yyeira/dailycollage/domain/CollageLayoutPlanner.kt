@@ -47,7 +47,13 @@ class CollageLayoutPlanner(
             LayoutRule.GRID_3 -> rowPackLayout(sizedImages, 3, "layout_auto_row_3")
             LayoutRule.GRID_4 -> rowPackLayout(sizedImages, 4, "layout_auto_row_4")
             LayoutRule.GRID_SQUARE -> gridSquareLayout(sizedImages, guessSquareColumns(sizedImages.size), "layout_grid_square")
-            LayoutRule.GRID_9 -> gridSquareLayout(sizedImages, 3, "layout_grid_9")
+            LayoutRule.GRID_9 -> gridSquareLayout(
+                sizedImages,
+                columns = 3,
+                description = "layout_grid_9",
+                gap = GRID_9_GAP,
+                fillPartialLastRow = true,
+            )
             LayoutRule.FIT_2 -> proportionalRowPackLayout(sizedImages, 2, "layout_fit_2")
             LayoutRule.FIT_3 -> proportionalRowPackLayout(sizedImages, 3, "layout_fit_3")
             LayoutRule.FIT_4 -> proportionalRowPackLayout(sizedImages, 4, "layout_fit_4")
@@ -326,21 +332,40 @@ class CollageLayoutPlanner(
         sizedImages: List<SizedImage>,
         columns: Int,
         description: String,
+        gap: Int = GAP,
+        fillPartialLastRow: Boolean = false,
     ): CollageLayout {
         val rows = ceil(sizedImages.size.toDouble() / columns).toInt()
-        val slotSize = (canvasWidth - GAP * (columns - 1)) / columns
-        val canvasHeight = slotSize * rows + GAP * (rows - 1)
+        val slotSize = (canvasWidth - gap * (columns - 1)) / columns
+        val canvasHeight = slotSize * rows + gap * (rows - 1)
+        val cellsInLastRow = if (rows == 0) 0 else sizedImages.size - (rows - 1) * columns
 
         val cells = sizedImages.mapIndexed { index, _ ->
             val row = index / columns
             val col = index % columns
-            CollageCell(
-                imageIndex = index,
-                left = col * (slotSize + GAP),
-                top = row * (slotSize + GAP),
-                width = slotSize,
-                height = slotSize,
-            )
+            val isLastRowPartial = fillPartialLastRow &&
+                row == rows - 1 &&
+                cellsInLastRow in 1 until columns
+
+            if (isLastRowPartial) {
+                val lastRowCol = index - (rows - 1) * columns
+                val lastRowSlotWidth = (canvasWidth - gap * (cellsInLastRow - 1)) / cellsInLastRow
+                CollageCell(
+                    imageIndex = index,
+                    left = lastRowCol * (lastRowSlotWidth + gap),
+                    top = row * (slotSize + gap),
+                    width = lastRowSlotWidth,
+                    height = slotSize,
+                )
+            } else {
+                CollageCell(
+                    imageIndex = index,
+                    left = col * (slotSize + gap),
+                    top = row * (slotSize + gap),
+                    width = slotSize,
+                    height = slotSize,
+                )
+            }
         }
 
         return CollageLayout(
@@ -543,5 +568,7 @@ class CollageLayoutPlanner(
 
     companion object {
         private const val GAP = 6
+        /** 跨天九宫格无间隙，避免黑色分隔线 */
+        const val GRID_9_GAP = 0
     }
 }

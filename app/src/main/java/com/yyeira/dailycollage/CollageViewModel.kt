@@ -18,6 +18,7 @@ import com.yyeira.dailycollage.model.DayPreview
 import com.yyeira.dailycollage.model.GalleryImage
 import com.yyeira.dailycollage.model.LayoutRule
 import com.yyeira.dailycollage.model.OutputAspectRatio
+import com.yyeira.dailycollage.util.CollageLogger
 import com.yyeira.dailycollage.util.ImageDeleter
 import com.yyeira.dailycollage.util.ImageSaver
 import com.yyeira.dailycollage.util.LayoutDescriptionFormatter
@@ -38,6 +39,7 @@ data class CollageUiState(
     val selectedAlbumIds: Set<Long> = emptySet(),
     val isLoadingAlbums: Boolean = false,
     val layoutRule: LayoutRule = LayoutRule.AUTO,
+    val crossDayCollage: Boolean = false,
     val outputAspectRatio: OutputAspectRatio = OutputAspectRatio.NATURAL,
     val deleteOriginalsAfterCollage: Boolean = false,
     val isLoadingPreview: Boolean = false,
@@ -73,8 +75,16 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshPermissionState() {
+        val hasPermission = PermissionHelper.hasAllPermissions(context)
         _uiState.update {
-            it.copy(needsPermission = !PermissionHelper.hasAllPermissions(context))
+            it.copy(needsPermission = !hasPermission)
+        }
+        if (hasPermission) {
+            val startDate = _uiState.value.startDate
+            val endDate = _uiState.value.endDate
+            if (startDate != null && endDate != null) {
+                loadAlbums(startDate, endDate)
+            }
         }
     }
 
@@ -92,11 +102,19 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             )
         }
         if (startDate != null && endDate != null) {
-            loadAlbums(startDate, endDate)
+            if (!PermissionHelper.hasAllPermissions(context)) {
+                _uiState.update { it.copy(needsPermission = true) }
+            } else {
+                loadAlbums(startDate, endDate)
+            }
         }
     }
 
     private fun loadAlbums(startDate: LocalDate, endDate: LocalDate) {
+        if (!PermissionHelper.hasAllPermissions(context)) {
+            _uiState.update { it.copy(isLoadingAlbums = false, availableAlbums = emptyList()) }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAlbums = true) }
             try {
@@ -122,6 +140,20 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
     fun selectAllAlbums() {
         clearPreviews()
         _uiState.update { it.copy(selectedAlbumIds = emptySet()) }
+    }
+
+    fun setCrossDayCollage(enabled: Boolean) {
+        if (_uiState.value.crossDayCollage != enabled) {
+            clearPreviews()
+            _uiState.update { it.copy(crossDayCollage = enabled) }
+            val startDate = _uiState.value.startDate
+            val endDate = _uiState.value.endDate
+            if (startDate != null && endDate != null && PermissionHelper.hasAllPermissions(context)) {
+                generatePreview()
+            }
+        } else {
+            _uiState.update { it.copy(crossDayCollage = enabled) }
+        }
     }
 
     fun setLayoutRule(rule: LayoutRule) {
@@ -173,7 +205,14 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val albumFilter = state.selectedAlbumIds.ifEmpty { null }
                 val previews = withContext(Dispatchers.IO) {
-                    buildPreviews(startDate, endDate, state.layoutRule, state.outputAspectRatio, albumFilter)
+                    buildPreviews(
+                        startDate,
+                        endDate,
+                        state.layoutRule,
+                        state.outputAspectRatio,
+                        albumFilter,
+                        state.crossDayCollage,
+                    )
                 }
                 _uiState.update {
                     it.copy(
@@ -351,7 +390,8 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
                         day.layout,
                         day.dateKey,
                         _uiState.value.outputAspectRatio,
-                        newOffsets,
+                        cropOffsets = newOffsets,
+                        showCellTimeLabels = day.showCellTimeLabels,
                     )
                 }
                 if (!day.previewBitmap.isRecycled) {
@@ -437,12 +477,14 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
                 val preserveOriginal = originalImages
                     ?: _uiState.value.previews.getOrNull(dayIndex)?.originalImages
                     ?: newImages
+                val existing = _uiState.value.previews.getOrNull(dayIndex)
                 val newDay = withContext(Dispatchers.IO) {
                     buildDayPreview(
                         dateKey,
                         newImages,
                         _uiState.value.layoutRule,
                         _uiState.value.outputAspectRatio,
+                        crossDayMode = existing?.showCellTimeLabels == true,
                     ).copy(originalImages = preserveOriginal)
                 }
                 val currentPreviews = _uiState.value.previews
@@ -482,7 +524,8 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             day.layout,
             day.dateKey,
             _uiState.value.outputAspectRatio,
-            day.cropOffsets,
+            cropOffsets = day.cropOffsets,
+            showCellTimeLabels = day.showCellTimeLabels,
         )
         if (!day.previewBitmap.isRecycled) {
             day.previewBitmap.recycle()
@@ -505,20 +548,35 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
         layoutRule: LayoutRule,
         outputAspectRatio: OutputAspectRatio,
         bucketIds: Set<Long>? = null,
+        crossDayCollage: Boolean = false,
     ): List<DayPreview> {
         val images = galleryRepository.queryImages(startDate, endDate, bucketIds)
         if (images.isEmpty()) {
             throw NoImagesException()
         }
 
-        return if (layoutRule == LayoutRule.GRID_9) {
-            ImageGrouper.groupByNine(images).map { (groupKey, groupImages) ->
-                buildDayPreview(groupKey, groupImages, layoutRule, outputAspectRatio)
+        if (crossDayCollage) {
+            CollageLogger.i(
+                "buildPreviews crossDay mode range=$startDate..$endDate images=${images.size}",
+            )
+            return ImageGrouper.groupByCrossDayMerge(images).map { (groupKey, groupImages) ->
+                buildDayPreview(
+                    dateKey = groupKey,
+                    dayImages = groupImages,
+                    layoutRule = layoutRule,
+                    outputAspectRatio = outputAspectRatio,
+                    crossDayMode = true,
+                )
             }
-        } else {
-            ImageGrouper.groupByDay(images).map { (dateKey, dayImages) ->
-                buildDayPreview(dateKey, dayImages, layoutRule, outputAspectRatio)
-            }
+        }
+
+        CollageLogger.i(
+            "buildPreviews daily mode range=$startDate..$endDate images=${images.size} " +
+                "days=${ImageGrouper.groupByDay(images).size}",
+        )
+
+        return ImageGrouper.groupByDay(images).map { (dateKey, dayImages) ->
+            buildDayPreview(dateKey, dayImages, layoutRule, outputAspectRatio)
         }
     }
 
@@ -527,11 +585,24 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
         dayImages: List<com.yyeira.dailycollage.model.GalleryImage>,
         layoutRule: LayoutRule,
         outputAspectRatio: OutputAspectRatio,
+        crossDayMode: Boolean = false,
     ): DayPreview {
+        val effectiveRule = if (crossDayMode) LayoutRule.GRID_9 else layoutRule
         val dimensions = dimensionResolver.resolve(dayImages).map { it.second }
-        val layout = layoutPlanner.plan(dayImages, dimensions, layoutRule)
+        val layout = layoutPlanner.plan(dayImages, dimensions, effectiveRule)
         val layoutDescription = LayoutDescriptionFormatter.format(context, layout.description)
-        val previewBitmap = previewMaker.createCollage(dayImages, layout, dateKey, outputAspectRatio)
+        val previewBitmap = previewMaker.createCollage(
+            dayImages,
+            layout,
+            dateKey,
+            outputAspectRatio,
+            showCellTimeLabels = crossDayMode,
+        )
+        CollageLogger.d(
+            "buildDayPreview dateKey=$dateKey crossDay=$crossDayMode " +
+                "images=${dayImages.size} layout=${layout.description} " +
+                "canvas=${layout.canvasWidth}x${layout.canvasHeight} cells=${layout.cells.size}",
+        )
         return DayPreview(
             dateKey = dateKey,
             imageCount = dayImages.size,
@@ -539,6 +610,7 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             previewBitmap = previewBitmap,
             images = dayImages,
             layout = layout,
+            showCellTimeLabels = crossDayMode,
         )
     }
 
@@ -572,7 +644,8 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
                 day.layout,
                 day.dateKey,
                 _uiState.value.outputAspectRatio,
-                day.cropOffsets,
+                cropOffsets = day.cropOffsets,
+                showCellTimeLabels = day.showCellTimeLabels,
             )
             val saved = imageSaver.saveJpeg(collage, "${sanitizeFileName(day.dateKey)}.jpg")
             collage.recycle()

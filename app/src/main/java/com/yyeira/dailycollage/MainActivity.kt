@@ -62,6 +62,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -204,8 +205,13 @@ fun CollageScreen(viewModel: CollageViewModel) {
                                     .filter { it.bucketId in uiState.selectedAlbumIds }
                                     .joinToString("、") { it.displayName }
                             }
+                            val modePart = if (uiState.crossDayCollage) {
+                                stringResource(R.string.collage_mode_cross_day)
+                            } else {
+                                stringResource(R.string.collage_mode_by_day)
+                            }
                             Text(
-                                text = "$datePart · $albumPart",
+                                text = "$datePart · $albumPart · $modePart",
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -244,6 +250,7 @@ fun CollageScreen(viewModel: CollageViewModel) {
                             albums = uiState.availableAlbums,
                             selectedIds = uiState.selectedAlbumIds,
                             isLoading = uiState.isLoadingAlbums,
+                            needsPermission = uiState.needsPermission,
                             enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
                             onToggle = viewModel::toggleAlbum,
                             onSelectAll = viewModel::selectAllAlbums,
@@ -252,10 +259,18 @@ fun CollageScreen(viewModel: CollageViewModel) {
                 }
 
                 item {
+                    CollageModeSelector(
+                        crossDayCollage = uiState.crossDayCollage,
+                        onCrossDayChanged = viewModel::setCrossDayCollage,
+                        enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                    )
+                }
+
+                item {
                     LayoutRuleSelector(
                         selectedRule = uiState.layoutRule,
                         onRuleSelected = viewModel::setLayoutRule,
-                        enabled = !uiState.isProcessing && !uiState.isLoadingPreview,
+                        enabled = !uiState.crossDayCollage && !uiState.isProcessing && !uiState.isLoadingPreview,
                     )
                 }
 
@@ -466,10 +481,52 @@ fun CollageScreen(viewModel: CollageViewModel) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun CollageModeSelector(
+    crossDayCollage: Boolean,
+    onCrossDayChanged: (Boolean) -> Unit,
+    enabled: Boolean,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = stringResource(R.string.collage_mode_title),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = !crossDayCollage,
+                onClick = { onCrossDayChanged(false) },
+                enabled = enabled,
+                label = { Text(stringResource(R.string.collage_mode_by_day)) },
+                modifier = Modifier.weight(1f),
+            )
+            FilterChip(
+                selected = crossDayCollage,
+                onClick = { onCrossDayChanged(true) },
+                enabled = enabled,
+                label = { Text(stringResource(R.string.collage_mode_cross_day)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (crossDayCollage) {
+            Text(
+                text = stringResource(R.string.collage_mode_cross_day_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun AlbumSelector(
     albums: List<Album>,
     selectedIds: Set<Long>,
     isLoading: Boolean,
+    needsPermission: Boolean,
     enabled: Boolean,
     onToggle: (Long) -> Unit,
     onSelectAll: () -> Unit,
@@ -482,6 +539,11 @@ private fun AlbumSelector(
         when {
             isLoading -> Text(
                 text = stringResource(R.string.album_loading),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            needsPermission && albums.isEmpty() -> Text(
+                text = stringResource(R.string.album_permission_required),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -656,7 +718,9 @@ private fun PreviewDayCard(
             }
 
             Box(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black),
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
@@ -664,6 +728,7 @@ private fun PreviewDayCard(
                     contentDescription = preview.dateKey,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .alpha(if (isRebuilding) 0.55f else 1f)
                         .pointerInput(isRebuilding) {
                             if (isRebuilding) return@pointerInput
                             detectTapGestures(
@@ -672,9 +737,14 @@ private fun PreviewDayCard(
                         },
                     contentScale = ContentScale.Fit,
                 )
-                if (isRebuilding) {
-                    CircularProgressIndicator()
-                }
+            }
+
+            if (isRebuilding) {
+                Text(
+                    text = stringResource(R.string.rebuilding_preview),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             LazyRow(
@@ -980,7 +1050,11 @@ private fun ImageOrderEditorItem(
                     contentScale = ContentScale.Crop,
                 )
             } else {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
             }
 
             Box(
@@ -1360,8 +1434,6 @@ private fun ZoomablePreviewDialog(
     }
 }
 
-private const val PREVIEW_CANVAS_WIDTH = 360
-
 private data class NormalizedCellRect(
     val imageIndex: Int,
     val left: Float,
@@ -1379,11 +1451,11 @@ private fun computeNormalizedCellRects(
     bitmapWidth: Int,
     bitmapHeight: Int,
 ): List<NormalizedCellRect> {
-    val layoutScale = PREVIEW_CANVAS_WIDTH.toFloat() / layout.canvasWidth
+    val layoutScale = bitmapWidth.toFloat() / layout.canvasWidth
     val naturalHeight = layout.canvasHeight * layoutScale
 
-    val fitterScale = maxOf(bitmapWidth / PREVIEW_CANVAS_WIDTH.toFloat(), bitmapHeight / naturalHeight)
-    val drawWidth = PREVIEW_CANVAS_WIDTH * fitterScale
+    val fitterScale = maxOf(bitmapWidth / bitmapWidth.toFloat(), bitmapHeight / naturalHeight)
+    val drawWidth = bitmapWidth * fitterScale
     val drawHeight = naturalHeight * fitterScale
     val offsetX = (bitmapWidth - drawWidth) / 2f
     val offsetY = (bitmapHeight - drawHeight) / 2f

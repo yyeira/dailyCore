@@ -43,7 +43,12 @@
     <string name="album_all">全部图库</string>
     <string name="album_item">%1$s (%2$d)</string>
     <string name="album_loading">正在加载图库…</string>
+    <string name="album_permission_required">需要相册权限后才能加载图库</string>
     <string name="album_empty">所选日期范围内没有找到图库</string>
+    <string name="collage_mode_title">拼图模式</string>
+    <string name="collage_mode_by_day">按天拼图</string>
+    <string name="collage_mode_cross_day">跨天九宫格</string>
+    <string name="collage_mode_cross_day_hint">按天合并，每组最多 9 张；同一天不会拆到两张拼图。超出则自动分多张。</string>
     <string name="layout_rule_title">布局规则</string>
     <string name="layout_rule_auto">智能推荐</string>
     <string name="layout_rule_vertical">竖向排列</string>
