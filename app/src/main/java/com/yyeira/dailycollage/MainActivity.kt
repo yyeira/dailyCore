@@ -735,7 +735,6 @@ private fun PreviewDayCard(
         ZoomablePreviewDialog(
             preview = preview,
             cellRects = cellRects,
-            isRebuilding = isRebuilding,
             onSwapImages = onSwapImages,
             onCropOffsetChanged = onCropOffsetChanged,
             onDismiss = { showZoomDialog = false },
@@ -1076,7 +1075,6 @@ private fun AddImageButton(
 private fun ZoomablePreviewDialog(
     preview: DayPreview,
     cellRects: List<NormalizedCellRect>,
-    isRebuilding: Boolean,
     onSwapImages: (Int, Int) -> Unit,
     onCropOffsetChanged: (Int, CropOffset) -> Unit,
     onDismiss: () -> Unit,
@@ -1309,10 +1307,6 @@ private fun ZoomablePreviewDialog(
                         }
                     }
                 }
-            }
-
-            if (isRebuilding) {
-                CircularProgressIndicator(color = Color.White)
             }
 
             Box(
