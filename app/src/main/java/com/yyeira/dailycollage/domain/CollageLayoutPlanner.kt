@@ -47,6 +47,7 @@ class CollageLayoutPlanner(
             LayoutRule.GRID_3 -> rowPackLayout(sizedImages, 3, "layout_auto_row_3")
             LayoutRule.GRID_4 -> rowPackLayout(sizedImages, 4, "layout_auto_row_4")
             LayoutRule.GRID_SQUARE -> gridSquareLayout(sizedImages, guessSquareColumns(sizedImages.size), "layout_grid_square")
+            LayoutRule.GRID_9 -> gridSquareLayout(sizedImages, 3, "layout_grid_9")
             LayoutRule.FIT_2 -> proportionalRowPackLayout(sizedImages, 2, "layout_fit_2")
             LayoutRule.FIT_3 -> proportionalRowPackLayout(sizedImages, 3, "layout_fit_3")
             LayoutRule.FIT_4 -> proportionalRowPackLayout(sizedImages, 4, "layout_fit_4")

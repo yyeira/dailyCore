@@ -33,6 +33,7 @@
     <string name="layout_hero_left">主图居左</string>
     <string name="layout_hero_right">主图居右</string>
     <string name="layout_grid_square">方格网格</string>
+    <string name="layout_grid_9">九宫格</string>
     <string name="layout_fit_2">双列等高</string>
     <string name="layout_fit_3">三列等高</string>
     <string name="layout_fit_4">四列等高</string>
@@ -54,6 +55,7 @@
     <string name="layout_rule_grid_3">三列网格</string>
     <string name="layout_rule_grid_4">四列网格</string>
     <string name="layout_rule_grid_square">方格网格</string>
+    <string name="layout_rule_grid_9">九宫格</string>
     <string name="layout_rule_fit_2">双列等高</string>
     <string name="layout_rule_fit_3">三列等高</string>
     <string name="layout_rule_fit_4">四列等高</string>

@@ -511,8 +511,14 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             throw NoImagesException()
         }
 
-        return ImageGrouper.groupByDay(images).map { (dateKey, dayImages) ->
-            buildDayPreview(dateKey, dayImages, layoutRule, outputAspectRatio)
+        return if (layoutRule == LayoutRule.GRID_9) {
+            ImageGrouper.groupByNine(images).map { (groupKey, groupImages) ->
+                buildDayPreview(groupKey, groupImages, layoutRule, outputAspectRatio)
+            }
+        } else {
+            ImageGrouper.groupByDay(images).map { (dateKey, dayImages) ->
+                buildDayPreview(dateKey, dayImages, layoutRule, outputAspectRatio)
+            }
         }
     }
 
@@ -568,7 +574,7 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
                 _uiState.value.outputAspectRatio,
                 day.cropOffsets,
             )
-            val saved = imageSaver.saveJpeg(collage, "${day.dateKey}.jpg")
+            val saved = imageSaver.saveJpeg(collage, "${sanitizeFileName(day.dateKey)}.jpg")
             collage.recycle()
             if (saved) {
                 savedCount++
@@ -602,6 +608,14 @@ class CollageViewModel(application: Application) : AndroidViewModel(application)
             warning = deleteWarning,
             pendingDeleteIntentSender = pendingDeleteIntentSender,
         )
+    }
+
+    private fun sanitizeFileName(dateKey: String): String {
+        return dateKey
+            .replace(" ~ ", "_")
+            .replace(" ", "_")
+            .replace("(", "")
+            .replace(")", "")
     }
 
     private fun clearPreviews() {

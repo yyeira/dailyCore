@@ -558,6 +558,7 @@ private fun layoutRuleLabelRes(rule: LayoutRule): Int {
         LayoutRule.GRID_3 -> R.string.layout_rule_grid_3
         LayoutRule.GRID_4 -> R.string.layout_rule_grid_4
         LayoutRule.GRID_SQUARE -> R.string.layout_rule_grid_square
+        LayoutRule.GRID_9 -> R.string.layout_rule_grid_9
         LayoutRule.FIT_2 -> R.string.layout_rule_fit_2
         LayoutRule.FIT_3 -> R.string.layout_rule_fit_3
         LayoutRule.FIT_4 -> R.string.layout_rule_fit_4
