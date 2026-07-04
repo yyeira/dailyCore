@@ -51,8 +51,9 @@
     <string name="layout_rule_fit_3">三列等高</string>
     <string name="layout_rule_fit_4">四列等高</string>
     <string name="edit_preview_hint">双击预览图进入全屏操作 · 点击缩略图交换位置</string>
-    <string name="zoom_hint_select">点击图片选中 · 双击切换缩放</string>
+    <string name="zoom_hint_select">点击选中 · 长按拖动交换 · 双指缩放</string>
     <string name="zoom_hint_swap">再次点击编辑裁切 · 点击另一张交换位置</string>
+    <string name="zoom_hint_drag">拖到另一张图片松手交换</string>
     <string name="crop_editor_title">调整显示区域</string>
     <string name="crop_editor_confirm">确认</string>
     <string name="crop_editor_reset">居中重置</string>

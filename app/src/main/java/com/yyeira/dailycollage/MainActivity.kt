@@ -14,6 +14,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -955,6 +956,9 @@ private fun ZoomablePreviewDialog(
     var offsetY by remember { mutableStateOf(0f) }
     var selectedCellIndex by remember { mutableStateOf(-1) }
     var editingCropIndex by remember { mutableStateOf(-1) }
+    var isDraggingImage by remember { mutableStateOf(false) }
+    var dragSourceIndex by remember { mutableStateOf(-1) }
+    var dragTargetIndex by remember { mutableStateOf(-1) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -1015,6 +1019,7 @@ private fun ZoomablePreviewDialog(
                 }
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
+                        if (isDraggingImage) return@detectTransformGestures
                         val newScale = (scale * zoom).coerceIn(1f, 5f)
                         scale = newScale
                         if (newScale > 1f) {
@@ -1027,6 +1032,56 @@ private fun ZoomablePreviewDialog(
                             offsetY = 0f
                         }
                     }
+                }
+                .pointerInput(cellRects) {
+                    val boxW = size.width.toFloat()
+                    val boxH = size.height.toFloat()
+                    val bw = preview.previewBitmap.width.toFloat()
+                    val bh = preview.previewBitmap.height.toFloat()
+                    val fitSc = minOf(boxW / bw, boxH / bh)
+                    val dw = bw * fitSc
+                    val dh = bh * fitSc
+                    val dl = (boxW - dw) / 2f
+                    val dt = (boxH - dh) / 2f
+                    val cx = boxW / 2f
+                    val cy = boxH / 2f
+
+                    fun hitAtScreen(pos: Offset): Int {
+                        val lx = (pos.x - cx - offsetX) / scale + cx
+                        val ly = (pos.y - cy - offsetY) / scale + cy
+                        return hitTestCell(cellRects, (lx - dl) / dw, (ly - dt) / dh)
+                    }
+
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { startPos ->
+                            val cellIndex = hitAtScreen(startPos)
+                            if (cellIndex >= 0) {
+                                dragSourceIndex = cellIndex
+                                dragTargetIndex = -1
+                                isDraggingImage = true
+                                selectedCellIndex = -1
+                            }
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            if (!isDraggingImage) return@detectDragGesturesAfterLongPress
+                            val target = hitAtScreen(change.position)
+                            dragTargetIndex = if (target >= 0 && target != dragSourceIndex) target else -1
+                        },
+                        onDragEnd = {
+                            if (dragSourceIndex >= 0 && dragTargetIndex >= 0) {
+                                onSwapImages(dragSourceIndex, dragTargetIndex)
+                            }
+                            isDraggingImage = false
+                            dragSourceIndex = -1
+                            dragTargetIndex = -1
+                        },
+                        onDragCancel = {
+                            isDraggingImage = false
+                            dragSourceIndex = -1
+                            dragTargetIndex = -1
+                        },
+                    )
                 },
             contentAlignment = Alignment.Center,
         ) {
@@ -1048,8 +1103,6 @@ private fun ZoomablePreviewDialog(
                 )
 
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val selIdx = selectedCellIndex
-                    if (selIdx < 0) return@Canvas
                     val bw = preview.previewBitmap.width.toFloat()
                     val bh = preview.previewBitmap.height.toFloat()
                     val cs = minOf(size.width / bw, size.height / bh)
@@ -1057,21 +1110,35 @@ private fun ZoomablePreviewDialog(
                     val dh = bh * cs
                     val dl = (size.width - dw) / 2f
                     val dt = (size.height - dh) / 2f
+                    val sw = 3.dp.toPx()
 
-                    val rect = cellRects.firstOrNull { it.imageIndex == selIdx }
-                        ?: return@Canvas
-                    drawRect(
-                        color = Color.Yellow.copy(alpha = 0.85f),
-                        topLeft = Offset(
-                            dl + rect.left * dw,
-                            dt + rect.top * dh,
-                        ),
-                        size = Size(
-                            (rect.right - rect.left) * dw,
-                            (rect.bottom - rect.top) * dh,
-                        ),
-                        style = Stroke(width = 3.dp.toPx()),
-                    )
+                    fun drawCellBorder(idx: Int, color: Color) {
+                        val rect = cellRects.firstOrNull { it.imageIndex == idx }
+                            ?: return
+                        drawRect(
+                            color = color,
+                            topLeft = Offset(dl + rect.left * dw, dt + rect.top * dh),
+                            size = Size(
+                                (rect.right - rect.left) * dw,
+                                (rect.bottom - rect.top) * dh,
+                            ),
+                            style = Stroke(width = sw),
+                        )
+                    }
+
+                    val srcIdx = dragSourceIndex
+                    val tgtIdx = dragTargetIndex
+                    if (srcIdx >= 0) {
+                        drawCellBorder(srcIdx, Color.Yellow.copy(alpha = 0.85f))
+                        if (tgtIdx >= 0) {
+                            drawCellBorder(tgtIdx, Color.Cyan.copy(alpha = 0.85f))
+                        }
+                    } else {
+                        val selIdx = selectedCellIndex
+                        if (selIdx >= 0) {
+                            drawCellBorder(selIdx, Color.Yellow.copy(alpha = 0.85f))
+                        }
+                    }
                 }
             }
 
@@ -1098,6 +1165,7 @@ private fun ZoomablePreviewDialog(
 
             Text(
                 text = when {
+                    isDraggingImage -> stringResource(R.string.zoom_hint_drag)
                     selectedCellIndex >= 0 -> stringResource(R.string.zoom_hint_swap)
                     else -> stringResource(R.string.zoom_hint_select)
                 },
